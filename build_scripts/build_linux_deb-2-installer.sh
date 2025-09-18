@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 
-set -o errexit
+set -euo pipefail
 
-if [ ! "$1" ]; then
-  echo "This script requires either amd64 of arm64 as an argument"
+# Ensure we run from the script directory so relative paths work
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR" || exit 1
+
+if [ "${1-}" = "" ]; then
+  echo "This script requires either amd64 or arm64 as an argument"
   exit 1
 elif [ "$1" = "amd64" ]; then
   PLATFORM="amd64"
@@ -11,6 +15,11 @@ else
   PLATFORM="arm64"
 fi
 export PLATFORM
+
+# Validate required tools early
+for cmd in git npm jq python pyinstaller dpkg-deb; do
+  command -v "$cmd" >/dev/null 2>&1 || { echo "Required command not found: $cmd" >&2; exit 1; }
+done
 
 git status
 git submodule
@@ -37,11 +46,9 @@ mkdir dist
 
 echo "Create executables with pyinstaller"
 SPEC_FILE=$(python -c 'import sys; from pathlib import Path; path = Path(sys.argv[1]); print(path.absolute().as_posix())' "pyinstaller.spec")
-pyinstaller --log-level=INFO "$SPEC_FILE"
-LAST_EXIT_CODE=$?
-if [ "$LAST_EXIT_CODE" -ne 0 ]; then
+if ! pyinstaller --log-level=INFO "$SPEC_FILE"; then
   echo >&2 "pyinstaller failed!"
-  exit $LAST_EXIT_CODE
+  exit 1
 fi
 
 # Creates a directory of licenses
@@ -58,7 +65,7 @@ format_deb_version_string() {
   # - replace '.dev' with '-dev'
   echo "$version_str" | sed -E 's/([0-9])(rc|beta)/\1-\2/g; s/\.dev/-dev/g'
 }
-pip install jinjanator
+pip install --disable-pip-version-check jinjanator
 CLI_DEB_BASE="chia-blockchain-cli_$CHIA_INSTALLER_VERSION-1_$PLATFORM"
 mkdir -p "dist/$CLI_DEB_BASE/opt/chia"
 mkdir -p "dist/$CLI_DEB_BASE/usr/bin"
@@ -68,7 +75,12 @@ CHIA_DEB_CONTROL_VERSION=$(format_deb_version_string "$CHIA_INSTALLER_VERSION")
 export CHIA_DEB_CONTROL_VERSION
 j2 -o "dist/$CLI_DEB_BASE/DEBIAN/control" assets/deb/control.j2
 cp assets/systemd/*.service "dist/$CLI_DEB_BASE/etc/systemd/system/"
-cp -r dist/daemon/* "dist/$CLI_DEB_BASE/opt/chia/"
+if [ -d dist/daemon ]; then
+  cp -r dist/daemon/* "dist/$CLI_DEB_BASE/opt/chia/"
+else
+  echo "dist/daemon not found" >&2
+  exit 1
+fi
 
 ln -s ../../opt/chia/chia "dist/$CLI_DEB_BASE/usr/bin/chia"
 dpkg-deb --build --root-owner-group "dist/$CLI_DEB_BASE"
@@ -90,13 +102,22 @@ if [ "$PLATFORM" = "arm64" ]; then
   # This is a temporary fix.
   # https://github.com/jordansissel/fpm/issues/1801#issuecomment-919877499
   # @TODO Consolidates the process to amd64 if the issue of electron-builder is resolved
-  sudo apt -y install ruby ruby-dev
+  if command -v sudo >/dev/null 2>&1; then
+    sudo apt -y install ruby ruby-dev
+  else
+    apt -y install ruby ruby-dev
+  fi
   # ERROR:  Error installing fpm:
   #     The last version of dotenv (>= 0) to support your Ruby & RubyGems was 2.8.1. Try installing it with `gem install dotenv -v 2.8.1` and then running the current command again
   #     dotenv requires Ruby version >= 3.0. The current ruby version is 2.7.0.0.
   # @TODO Once ruby 3.0 can be installed on `apt install ruby`, installing dotenv below should be removed.
-  sudo gem install dotenv -v 2.8.1
-  sudo gem install fpm
+  if command -v sudo >/dev/null 2>&1; then
+    sudo gem install dotenv -v 2.8.1
+    sudo gem install fpm
+  else
+    gem install dotenv -v 2.8.1
+    gem install fpm
+  fi
   echo USE_SYSTEM_FPM=true npx electron-builder build --linux deb --arm64 \
     --config.extraMetadata.name=chia-blockchain \
     --config.productName="$PRODUCT_NAME" --config.linux.desktop.Name="Chia Blockchain" \
@@ -121,7 +142,7 @@ else
     --config ../../../build_scripts/electron-builder.json
   LAST_EXIT_CODE=$?
 fi
-ls -l dist/linux*-unpacked/resources
+ls -l dist/linux*-unpacked/resources || true
 
 # reset the package.json to the original
 mv package.json.orig package.json
@@ -132,7 +153,24 @@ if [ "$LAST_EXIT_CODE" -ne 0 ]; then
 fi
 
 GUI_DEB_NAME=chia-blockchain_${CHIA_INSTALLER_VERSION}_${PLATFORM}.deb
-mv "dist/${PRODUCT_NAME}-${CHIA_INSTALLER_VERSION}.deb" "../../../build_scripts/dist/${GUI_DEB_NAME}"
+# Try to auto-detect the generated .deb from electron-builder
+EB_DEB_CANDIDATE=""
+if [ -f "dist/${PRODUCT_NAME}-${CHIA_INSTALLER_VERSION}.deb" ]; then
+  EB_DEB_CANDIDATE="dist/${PRODUCT_NAME}-${CHIA_INSTALLER_VERSION}.deb"
+else
+  # Prefer files containing version and platform, else pick the first .deb
+  set +e
+  EB_DEB_CANDIDATE=$(ls dist/*${CHIA_INSTALLER_VERSION}*${PLATFORM}*.deb 2>/dev/null | head -n 1)
+  if [ -z "${EB_DEB_CANDIDATE}" ]; then
+    EB_DEB_CANDIDATE=$(ls dist/*.deb 2>/dev/null | head -n 1)
+  fi
+  set -e
+fi
+if [ -z "${EB_DEB_CANDIDATE}" ] || [ ! -f "${EB_DEB_CANDIDATE}" ]; then
+  echo "Could not locate electron-builder .deb in dist/" >&2
+  exit 1
+fi
+mv "${EB_DEB_CANDIDATE}" "../../../build_scripts/dist/${GUI_DEB_NAME}"
 cd ../../../build_scripts || exit 1
 
 echo "Create final installer"
