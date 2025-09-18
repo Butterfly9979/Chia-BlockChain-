@@ -96,10 +96,10 @@ async def _validate_and_add_block(
             return None
         if expected_error is None:
             # We did not expect an error
-            raise AssertionError(Err(results.error))
-        elif Err(results.error) != expected_error:
+            raise AssertionError(results.error)
+        elif results.error != expected_error:
             # We expected an error but a different one
-            raise AssertionError(f"Expected {expected_error} but got {Err(results.error)}")
+            raise AssertionError(f"Expected {expected_error} but got {results.error}")
         await check_block_store_invariant(blockchain)
         return None
     if fork_info is None:
