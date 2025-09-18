@@ -82,10 +82,10 @@ if (-not (Get-Command jq -ErrorAction SilentlyContinue)) {
     Throw "jq not found and Chocolatey not available. Please install jq."
   }
 }
-cp package.json package.json.orig
+Copy-Item package.json package.json.orig -Force
 jq --arg VER "$env:CHIA_INSTALLER_VERSION" '.version=$VER' package.json > temp.json
-rm package.json
-mv temp.json package.json
+Remove-Item package.json -Force
+Move-Item temp.json package.json -Force
 Write-Output "   ---"
 
 Write-Output "   ---"
