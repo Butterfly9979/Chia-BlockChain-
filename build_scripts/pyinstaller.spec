@@ -1,9 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
-import importlib
 import os
 import pathlib
 import platform
 import sysconfig
+import os
 
 from PyInstaller.utils.hooks import collect_submodules, copy_metadata
 
@@ -81,39 +81,31 @@ if os.path.exists(f"{ROOT}/bladebit/bladebit_cuda"):
     ])
 
 if THIS_IS_WINDOWS:
-    chia_mod = importlib.import_module("chia")
-    dll_paths = pathlib.Path(sysconfig.get_path("platlib")) / "*.dll"
+    # Include all extension DLLs from site-packages
+    dll_glob = os.fspath(pathlib.Path(sysconfig.get_path("platlib")) / "*.dll")
 
     binaries = [
         (
-            dll_paths,
+            dll_glob,
             ".",
-        ),
-        (
-            "C:\\Windows\\System32\\msvcp140.dll",
-            ".",
-        ),
-        (
-            "C:\\Windows\\System32\\vcruntime140_1.dll",
-            ".",
-        ),
-        (
-            f"{ROOT}\\madmax\\chia_plot.exe",
-            "madmax"
-        ),
-        (
-            f"{ROOT}\\madmax\\chia_plot_k34.exe",
-            "madmax"
-        ),
-        (
-            f"{ROOT}\\bladebit\\bladebit.exe",
-            "bladebit"
-        ),
-        (
-            f"{ROOT}\\bladebit\\bladebit_cuda.exe",
-            "bladebit"
         ),
     ]
+
+    # Helper to add a binary only if it exists
+    def _maybe_add_binary(path_str: str, dest: str = ".") -> None:
+        if os.path.exists(path_str):
+            binaries.append((path_str, dest))
+
+    # Common MSVC runtime DLLs (present on most systems, optional otherwise)
+    _maybe_add_binary("C:\\Windows\\System32\\msvcp140.dll")
+    _maybe_add_binary("C:\\Windows\\System32\\vcruntime140.dll")
+    _maybe_add_binary("C:\\Windows\\System32\\vcruntime140_1.dll")
+
+    # Optional plotter/external tools
+    _maybe_add_binary(f"{ROOT}\\madmax\\chia_plot.exe", "madmax")
+    _maybe_add_binary(f"{ROOT}\\madmax\\chia_plot_k34.exe", "madmax")
+    _maybe_add_binary(f"{ROOT}\\bladebit\\bladebit.exe", "bladebit")
+    _maybe_add_binary(f"{ROOT}\\bladebit\\bladebit_cuda.exe", "bladebit")
 
 
 datas = []
