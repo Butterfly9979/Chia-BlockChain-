@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import pathlib
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -28,6 +29,37 @@ def excepted(path: pathlib.Path) -> bool:
     return name in excepted_packages
 
 
+def _resolve_poetry_executable(project_root_path: pathlib.Path) -> str:
+    # Allow override via environment variable
+    env_override = os.environ.get("POETRY")
+    if env_override:
+        return env_override
+
+    candidate_paths: list[pathlib.Path] = []
+    # Common local virtual env locations created by our tooling
+    candidate_paths.extend(
+        [
+            project_root_path / ".penv" / "Scripts" / "poetry",
+            project_root_path / ".penv" / "bin" / "poetry",
+            project_root_path / ".venv" / "Scripts" / "poetry",
+            project_root_path / ".venv" / "bin" / "poetry",
+        ]
+    )
+
+    for path in candidate_paths:
+        if path.exists():
+            return os.fspath(path)
+
+    # Fallback to poetry in PATH
+    poetry_from_path = shutil.which("poetry")
+    if poetry_from_path:
+        return poetry_from_path
+
+    raise FileNotFoundError(
+        "Unable to locate poetry executable. Set POETRY env var or ensure poetry is installed."
+    )
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as directory_string:
         print(f"Working in: {directory_string}")
@@ -36,7 +68,8 @@ def main() -> int:
         artifact_directory_path = directory_path.joinpath("artifacts")
         artifact_directory_path.mkdir()
 
-        extras = ["upnp"]
+        extras_env = os.environ.get("POETRY_EXTRAS", "upnp")
+        extras = [e for e in (s.strip() for s in extras_env.split(",")) if e]
 
         print("Downloading packages for Python version:")
         lines = [
@@ -51,16 +84,15 @@ def main() -> int:
 
         requirements_path = directory_path.joinpath("exported_requirements.txt")
 
-        if sys.platform == "win32":
-            poetry_path = pathlib.Path(".penv/Scripts/poetry")
-        else:
-            poetry_path = pathlib.Path(".penv/bin/poetry")
-
-        poetry_path = project_root.joinpath(poetry_path)
+        try:
+            poetry_exec = _resolve_poetry_executable(project_root)
+        except FileNotFoundError as e:
+            print(str(e), file=sys.stderr)
+            return 1
 
         subprocess.run(
             [
-                os.fspath(poetry_path),
+                poetry_exec,
                 "export",
                 "--format",
                 "requirements.txt",
@@ -93,7 +125,7 @@ def main() -> int:
             check=True,
         )
 
-        failed_artifacts = []
+        failed_artifacts: list[pathlib.Path] = []
 
         for artifact in artifact_directory_path.iterdir():
             if artifact.suffix == ".whl":
